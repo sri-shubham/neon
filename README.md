@@ -87,26 +87,73 @@ func main() {
 curl http://localhost:8080/users/alice    # Returns: User ID: alice
 curl -X POST http://localhost:8080/users/ # Returns: User created
 ```
-       neon.Module `base:"/user" v:"1"`
-       getUser     neon.Get
-   }
 
-   func (s UserService) GetUser(w http.ResponseWriter, r *http.Request) {
-       fmt.Fprint(w, "Hello, Neon Magic!")
-   }
-   ```
+## Middleware System
 
-4. **Run Your Magic Server:**
-   ```bash
-   go run test/main.go
-   ```
+Neon provides a three-level middleware system for maximum flexibility:
 
-5. **Explore the Glow:**
-   Neon adds a glow to your routes:
-   - Base route for UserService: `/user`
-   - Version: `v1`
-   - Route for `getUser`: `/user/v1`
+### Global Middleware
+Applied to all endpoints in your application:
+```go
+app := neon.New()
+app.Use(loggingMiddleware)
+app.Use(authMiddleware)
+```
 
-## Join the Coding Wizardry! 🧙‍♂️
+### Service-Level Middleware
+Applied to all endpoints within a specific service:
+```go
+type UserService struct {
+    neon.Module `base:"/users" v:"1" middleware:"auth,logging"`
+    // endpoints...
+}
+```
 
-Ready to illuminate your API development with Neon? Join the coding wizardry and explore the full potential of Neon on [GitHub](https://github.com/sri-shubham/neon). Let the coding magic begin! 🚀✨
+### Endpoint-Level Middleware
+Applied to specific endpoints only:
+```go
+type UserService struct {
+    neon.Module `base:"/users" v:"1"`
+    adminOnly   neon.Get `url:"/admin" middleware:"admin"`
+    // other endpoints...
+}
+```
+
+## Advanced Features
+
+### Versioning
+Neon supports API versioning through the `v` tag:
+```go
+type UserServiceV1 struct {
+    neon.Module `base:"/users" v:"1"`
+    // v1 endpoints
+}
+
+type UserServiceV2 struct {
+    neon.Module `base:"/users" v:"2"`
+    // v2 endpoints
+}
+```
+
+### Custom Port Configuration
+```go
+app := neon.New()
+app.SetPort(3000)
+app.Run() // Runs on port 3000
+```
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Roadmap
+
+Check out our [ROADMAP.md](ROADMAP.md) for upcoming features and improvements.
+
+## Join the Development! 🚀
+
+Ready to contribute to Neon's development? Join us on [GitHub](https://github.com/sri-shubham/neon) and help make API development in Go even better! ✨
