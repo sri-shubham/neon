@@ -8,8 +8,6 @@
 
 A lightweight, zero-dependency REST framework for Go that simplifies API development through struct tags and middleware composition.
 
-> **⚠️ Development Status**: This framework is in active development (v0.1.0) and is **NOT production-ready**. The API may change significantly between versions until v1.0.0. Use at your own risk in production environments. The main branch may be unstable and is subject to force pushes and breaking changes without notice.
-
 > **⚠️ Development Status**: This framework is currently in active development (v0.1.0). While functional, it is **not production-ready**. The main branch may contain breaking changes without notice as we work toward a stable v1.0.0 release. Use at your own risk in production environments.
 
 ## What's New in v0.1
