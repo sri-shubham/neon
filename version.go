@@ -1,3 +1,3 @@
 package neon
 
-const ver = "0.0.1"
+const ver = "0.1.0"
