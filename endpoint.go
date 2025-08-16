@@ -1,7 +1,6 @@
 package neon
 
 import (
-	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -32,8 +31,7 @@ func checkAPIMethodExists(sv reflect.Value, st reflect.Type, ft reflect.StructFi
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		rValue := reflect.ValueOf(r)
 		wValue := reflect.ValueOf(w)
-		fmt.Fprintln(w, "adsfgnh g")
-		fmt.Println(handlerMethod.Call([]reflect.Value{wValue, rValue}))
+		handlerMethod.Call([]reflect.Value{wValue, rValue})
 	}
 	return &handler, true
 }

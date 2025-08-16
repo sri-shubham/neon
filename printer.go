@@ -35,6 +35,6 @@ func printLogo() {
 }
 
 func printInfo(app *App) {
-	fmt.Println("Version:", green(ver))
-	fmt.Println("Environment:", yellow(app.Env))
+	app.Logger.Info("Version", "version", ver)
+	app.Logger.Info("Environment", "env", app.Env.String())
 }
