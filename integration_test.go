@@ -1,10 +1,12 @@
 package neon
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFullIntegration(t *testing.T) {
@@ -50,7 +52,7 @@ func TestFullIntegration(t *testing.T) {
 	t.Run("GET endpoint with service middleware", func(t *testing.T) {
 		executionOrder = []string{} // Reset
 
-		req := httptest.NewRequest("GET", "/integration/test", nil)
+		req := httptest.NewRequest("GET", "/v1/integration/test", nil)
 		w := httptest.NewRecorder()
 
 		app.mux.ServeHTTP(w, req)
@@ -81,7 +83,7 @@ func TestFullIntegration(t *testing.T) {
 	t.Run("POST endpoint with service and endpoint middleware", func(t *testing.T) {
 		executionOrder = []string{} // Reset
 
-		req := httptest.NewRequest("POST", "/integration/create", nil)
+		req := httptest.NewRequest("POST", "/v1/integration/create", nil)
 		w := httptest.NewRecorder()
 
 		app.mux.ServeHTTP(w, req)
@@ -110,7 +112,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// Test method not allowed
 	t.Run("Method not allowed", func(t *testing.T) {
-		req := httptest.NewRequest("PUT", "/integration/test", nil)
+		req := httptest.NewRequest("PUT", "/v1/integration/test", nil)
 		w := httptest.NewRecorder()
 
 		app.mux.ServeHTTP(w, req)
@@ -131,6 +133,86 @@ func TestFullIntegration(t *testing.T) {
 			t.Errorf("Expected status 404, got %d", w.Code)
 		}
 	})
+
+	// Test Path Parameters
+	t.Run("Path parameters", func(t *testing.T) {
+		app := New()
+		service := &PathParameterService{}
+		app.AddService(service)
+		app.loadAllServices()
+
+		req := httptest.NewRequest("GET", "/v1/path/alice/posts/123", nil)
+		w := httptest.NewRecorder()
+		app.mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", w.Code)
+		}
+
+		expected := "User: alice, Post: 123"
+		if w.Body.String() != expected {
+			t.Errorf("Expected body '%s', got '%s'", expected, w.Body.String())
+		}
+	})
+
+	// Test Versioning
+	t.Run("Versioning", func(t *testing.T) {
+		app := New()
+		app.AddService(&VersionedServiceV1{})
+		app.AddService(&VersionedServiceV2{})
+		app.loadAllServices()
+
+		// Test V1
+		req1 := httptest.NewRequest("GET", "/v1/api/info", nil)
+		w1 := httptest.NewRecorder()
+		app.mux.ServeHTTP(w1, req1)
+		if !strings.Contains(w1.Body.String(), "v1") {
+			t.Errorf("Expected v1 response, got %s", w1.Body.String())
+		}
+
+		// Test V2
+		req2 := httptest.NewRequest("GET", "/v2/api/info", nil)
+		w2 := httptest.NewRecorder()
+		app.mux.ServeHTTP(w2, req2)
+		if !strings.Contains(w2.Body.String(), "v2") {
+			t.Errorf("Expected v2 response, got %s", w2.Body.String())
+		}
+	})
+
+	// Test Lifecycle Hooks
+	t.Run("Lifecycle hooks", func(t *testing.T) {
+		app := New()
+		service := &LifecycleService{}
+		app.AddService(service)
+
+		// Run starts Init
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			cancel()
+		}()
+
+		if err := app.Run(ctx); err != nil {
+			t.Fatalf("App run failed: %v", err)
+		}
+
+		if !service.initialized {
+			t.Error("Service Init() was not called")
+		}
+
+		if !service.closed {
+			t.Error("Service Close() was not called")
+		}
+
+		// Test HealthCheck
+		req := httptest.NewRequest("GET", "/health", nil)
+		w := httptest.NewRecorder()
+		app.mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected health check 200, got %d", w.Code)
+		}
+	})
 }
 
 // Integration test service
@@ -148,12 +230,71 @@ func (s IntegrationTestService) CreateTest(w http.ResponseWriter, r *http.Reques
 	w.Write([]byte("create response"))
 }
 
+// Additional test services
+type PathParameterService struct {
+	Module  `base:"/path" v:"1"`
+	getPost Get `url:"/{user}/posts/{id}"`
+}
+
+func (s PathParameterService) GetPost(w http.ResponseWriter, r *http.Request) {
+	user := r.PathValue("user")
+	id := r.PathValue("id")
+	w.Write([]byte("User: " + user + ", Post: " + id))
+}
+
+type VersionedServiceV1 struct {
+	Module  `base:"/api" v:"1"`
+	getInfo Get `url:"/info"`
+}
+
+func (s VersionedServiceV1) GetInfo(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("v1 response"))
+}
+
+type VersionedServiceV2 struct {
+	Module  `base:"/api" v:"2"`
+	getInfo Get `url:"/info"`
+}
+
+func (s VersionedServiceV2) GetInfo(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("v2 response"))
+}
+
+type LifecycleService struct {
+	Module      `base:"/lifecycle"`
+	initialized bool
+	closed      bool
+}
+
+func (s *LifecycleService) Init() error {
+	s.initialized = true
+	return nil
+}
+
+func (s *LifecycleService) Close(ctx context.Context) error {
+	s.closed = true
+	return nil
+}
+
+func (s *LifecycleService) HealthCheck() error {
+	return nil
+}
+
+type IntegrationTestModuleService struct {
+	Module  `base:"/test"`
+	getTest Get `url:"/test"`
+}
+
+func (s IntegrationTestModuleService) GetTest(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("test response"))
+}
+
 func TestServiceLoading(t *testing.T) {
 	app := New()
 
 	// Test multiple services
 	service1 := &IntegrationTestService{}
-	service2 := &TestModuleService{}
+	service2 := &IntegrationTestModuleService{}
 
 	app.AddService(service1)
 	app.AddService(service2)
@@ -173,7 +314,7 @@ func TestServiceLoading(t *testing.T) {
 	app.loadAllServices()
 
 	// Test that routes were registered
-	req := httptest.NewRequest("GET", "/integration/test", nil)
+	req := httptest.NewRequest("GET", "/v1/integration/test", nil) // Fixed path with /v1
 	w := httptest.NewRecorder()
 	app.mux.ServeHTTP(w, req)
 

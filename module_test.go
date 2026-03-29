@@ -1,15 +1,25 @@
 package neon
 
 import (
+	"context"
 	"net/http"
 	"testing"
 )
 
-func TestModulePlaceholder(t *testing.T) {
+func TestModuleLifecycle(t *testing.T) {
 	module := Module{}
 
-	// Test that placeholder method exists (it returns nothing)
-	module.placeholder() // Should not panic
+	if err := module.Init(); err != nil {
+		t.Errorf("Expected Init to return nil, got %v", err)
+	}
+
+	if err := module.Close(context.Background()); err != nil {
+		t.Errorf("Expected Close to return nil, got %v", err)
+	}
+
+	if err := module.HealthCheck(); err != nil {
+		t.Errorf("Expected HealthCheck to return nil, got %v", err)
+	}
 }
 
 func TestModuleInterface(t *testing.T) {

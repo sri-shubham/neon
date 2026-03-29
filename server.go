@@ -1,11 +1,13 @@
 package neon
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 )
@@ -16,8 +18,6 @@ func (m Env) String() (out string) {
 	switch m {
 	case DevEnv:
 		out = "Development"
-	case TestEnv:
-		out = "Test"
 	case ProdEnv:
 		out = "Production"
 	default:
@@ -28,7 +28,6 @@ func (m Env) String() (out string) {
 
 const (
 	DevEnv = iota
-	TestEnv
 	ProdEnv
 )
 
@@ -93,6 +92,9 @@ func (s *App) AddMiddleware(fun Middleware) {
 }
 
 func (s *App) RegisterMiddleware(name string, fn Middleware) {
+	if s.middleware == nil {
+		s.middleware = make(map[string]Middleware)
+	}
 	s.middleware[name] = fn
 }
 
@@ -148,16 +150,28 @@ func (s *App) loadAllServices() {
 
 		// Get module-level middlewares
 		var moduleMiddlewares []Middleware
+		var moduleMiddlewareNames []string
 		if len(moduleMiddleware) > 0 {
 			middlewareNames := strings.Split(moduleMiddleware, ",")
+			seen := make(map[string]bool)
 			for _, middlewareName := range middlewareNames {
 				name := strings.Trim(middlewareName, " ")
+				if name == "" {
+					continue
+				}
+
+				if seen[name] {
+					s.Logger.Info("Duplicate middleware registered for module", "base", baseURL, "middleware", name)
+				}
+				seen[name] = true
+
 				mw, ok := s.middleware[name]
 				if !ok {
 					s.Logger.Error(nil, "Middleware not registered", "name", name)
 					continue
 				}
 				moduleMiddlewares = append(moduleMiddlewares, mw)
+				moduleMiddlewareNames = append(moduleMiddlewareNames, name)
 			}
 		}
 
@@ -174,12 +188,6 @@ func (s *App) loadAllServices() {
 				apiURL = "/"
 			}
 
-			// Build full path
-			fullPath := strings.TrimSuffix(baseURL, "/") + apiURL
-			if fullPath == "" {
-				fullPath = "/"
-			}
-
 			apiVersion := fieldType.Tag.Get("v")
 			if apiVersion == "" {
 				if version != "" {
@@ -189,13 +197,38 @@ func (s *App) loadAllServices() {
 				}
 			}
 
+			// Build full path with versioning support
+			prefix := ""
+			if apiVersion != "" {
+				prefix = "/v" + apiVersion
+			}
+			fullPath := prefix + strings.TrimSuffix(baseURL, "/") + apiURL
+			if fullPath == "" {
+				fullPath = "/"
+			}
+
 			// Get endpoint-level middlewares
 			apiMiddleware := fieldType.Tag.Get("middleware")
 			var endpointMiddlewares []Middleware
 			if len(apiMiddleware) > 0 {
 				names := strings.Split(apiMiddleware, ",")
+
+				seenMiddlewares := make(map[string]bool)
+				for _, mName := range moduleMiddlewareNames {
+					seenMiddlewares[mName] = true
+				}
+
 				for _, middlewareName := range names {
 					name := strings.Trim(middlewareName, " ")
+					if name == "" {
+						continue
+					}
+
+					if seenMiddlewares[name] {
+						s.Logger.Info("Duplicate middleware registered for endpoint", "path", fullPath, "middleware", name)
+					}
+					seenMiddlewares[name] = true
+
 					mw, ok := s.middleware[name]
 					if !ok {
 						s.Logger.Error(nil, "Middleware not registered", "name", name)
@@ -222,7 +255,7 @@ func (s *App) loadAllServices() {
 
 			// Register the route with method-specific handling
 			method := strings.ToUpper(fieldType.Type.String()[5:]) // Remove "neon." prefix
-			s.registerRoute(method, fullPath, wrappedHandler)
+			s.registerRoute(method, fullPath, wrappedHandler, len(allMiddlewares))
 		}
 	}
 }
@@ -240,7 +273,13 @@ func (s *App) wrapWithMiddlewares(handler http.HandlerFunc, middlewares []Middle
 }
 
 // registerRoute registers a route with method checking
-func (s *App) registerRoute(method, path string, handler http.HandlerFunc) {
+func (s *App) registerRoute(method, path string, handler http.HandlerFunc, totalMiddlewares int) {
+	if s.routes == nil {
+		s.routes = make(map[string]map[string]http.HandlerFunc)
+	}
+	if s.mux == nil {
+		s.mux = http.NewServeMux()
+	}
 	// Initialize path map if it doesn't exist
 	if s.routes[path] == nil {
 		s.routes[path] = make(map[string]http.HandlerFunc)
@@ -261,48 +300,116 @@ func (s *App) registerRoute(method, path string, handler http.HandlerFunc) {
 	// Add the method handler to the path
 	s.routes[path][method] = handler
 
-	// Count total middlewares for this route
-	totalMiddlewares := len(s.globalMiddlewares)
-	fmt.Printf("%s\t%s\t(%d middlewares)\n", blue(method), yellow(path), totalMiddlewares)
+	if s.Env == DevEnv {
+		fmt.Printf("%s\t%s\t(%d middlewares)\n", blue(method), yellow(path), totalMiddlewares)
+	}
 }
 
-func (s *App) Run() error {
+func (s *App) Run(ctx context.Context) error {
 
-	printLogo()
-	printInfo(s)
-	fmt.Println("Server Starting on Port:", blue(s.Port))
+	if s.Env == DevEnv {
+		printLogo()
+		printInfo(s)
+	}
 
-	// Add built-in middlewares to global middlewares
-	s.globalMiddlewares = append([]Middleware{requestLogger, panicRecovery}, s.globalMiddlewares...)
+	s.Logger.Info("Server Starting", "port", s.Port, "Enviornment", s.Env)
 
 	// Build all Endpoints after middleware registration
 	// This ensures all changes(middlewares) after adding services are also included
 	s.loadAllServices()
 
-	if s.Env == ProdEnv && s.Port == 443 && s.TLSCert != "" && s.TLSKey != "" {
-		err := http.ListenAndServeTLS(fmt.Sprintf(":%d", s.Port), s.TLSCert, s.TLSKey, s.mux)
-		if err != nil {
-			log.Printf("TLS server error: %v", err)
+	// Execute Init() on all services
+	for _, service := range s.services {
+		if err := service.Init(); err != nil {
+			return fmt.Errorf("module init failed: %w", err)
 		}
+	}
+
+	// Register an automatic healthcheck endpoint for all services
+	healthHandler := s.wrapWithMiddlewares(func(w http.ResponseWriter, r *http.Request) {
+		for _, service := range s.services {
+			if err := service.HealthCheck(); err != nil {
+				http.Error(w, fmt.Sprintf("Service unhealthy: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}, s.globalMiddlewares)
+	s.registerRoute("GET", "/health", healthHandler, len(s.globalMiddlewares))
+
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", s.Port),
+		Handler: s.mux,
+	}
+
+	serverErrors := make(chan error, 1)
+
+	go func() {
+		if s.Env == ProdEnv && s.Port == 443 && s.TLSCert != "" && s.TLSKey != "" {
+			err := srv.ListenAndServeTLS(s.TLSCert, s.TLSKey)
+			if err != nil && err != http.ErrServerClosed {
+				s.Logger.Error(err, "TLS server error")
+				serverErrors <- err
+			}
+		} else {
+			err := srv.ListenAndServe()
+			if err != nil && err != http.ErrServerClosed {
+				s.Logger.Error(err, "Server error")
+				serverErrors <- err
+			}
+		}
+	}()
+
+	select {
+	case err := <-serverErrors:
 		return err
+
+	case <-ctx.Done():
+		s.Logger.Info("Server shutdown started")
+
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(timeoutCtx); err != nil {
+			s.Logger.Error(err, "Server graceful shutdown failed")
+			return err
+		}
+
+		// Close any services that implement Close(context.Context) error
+		for _, service := range s.services {
+			if err := service.Close(timeoutCtx); err != nil {
+				s.Logger.Error(err, "Service close failed")
+			}
+		}
 	}
-	err := http.ListenAndServe(fmt.Sprintf(":%d", s.Port), s.mux)
-	if err != nil {
-		log.Printf("Server error: %v", err)
-	}
-	return err
+
+	return nil
 }
 
-// Request logger middleware
-func requestLogger(next http.Handler) http.Handler {
+// Prepare builds all Endpoints without starting a server (useful for tests and benchmarks)
+func (s *App) Prepare() {
+	s.loadAllServices()
+}
+
+// ServeHTTP satisfies the standard http.Handler interface
+func (s *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.mux == nil {
+		s.mux = http.NewServeMux()
+	}
+	s.mux.ServeHTTP(w, r)
+}
+
+// RequestLogger middleware
+func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s %s", r.RemoteAddr, r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }
 
-// Panic recovery middleware
-func panicRecovery(next http.Handler) http.Handler {
+// PanicRecovery middleware
+func PanicRecovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {

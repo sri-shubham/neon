@@ -1,15 +1,33 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/zapr"
 	"github.com/sri-shubham/neon"
+	"go.uber.org/zap"
 )
 
 func main() {
-	app := neon.New()
-	app.Port = 8080
+	app := neon.New(&neon.Config{
+		Port: 8080,
+	})
+	app.SetEnv(neon.ProdEnv)
+
+	var log logr.Logger
+
+	zapLog, err := zap.NewProduction()
+	if err != nil {
+		panic(fmt.Sprintf("who watches the watchmen (%v)?", err))
+	}
+	log = zapr.NewLogger(zapLog)
+
+	app.Logger = log
 
 	// 1. GLOBAL MIDDLEWARE - Applied to ALL endpoints
 	app.AddMiddleware(simpleLogger)
@@ -23,18 +41,15 @@ func main() {
 	app.AddService(&UserService{})
 	app.AddService(&ProductService{})
 
-	fmt.Println("Starting server with 3-level middleware system...")
-	fmt.Println("1. Global: Logger + Global")
-	fmt.Println("2. Service: Auth + CORS (for UserService), RateLimit (for ProductService)")
-	fmt.Println("3. Endpoint: Custom per endpoint")
-
-	app.Run()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	app.Run(ctx)
 }
 
 // UserService with service-level middleware
 type UserService struct {
-	neon.Module  `base:"/users" v:"1" middleware:"Auth,CORS"`
-	getUser      neon.Get  `url:"/{id}" middleware:""`                // Single parameter
+	neon.Module  `base:"/users" v:"1" middleware:"Auth,CORS,Auth"`
+	getUser      neon.Get  `url:"/{id}" middleware:"Auth,Auth"`       // Single parameter
 	getUserPosts neon.Get  `url:"/{id}/posts/{postId}" middleware:""` // Multiple parameters
 	createUser   neon.Post `url:"/" middleware:"RateLimit"`           // Additional endpoint middleware
 	updateUser   neon.Put  `url:"/{id}" middleware:""`                // Update with ID parameter

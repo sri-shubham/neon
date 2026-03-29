@@ -76,7 +76,7 @@ func main() {
     app := neon.New()
     app.AddService(&UserService{})
     
-    if err := app.Run(); err != nil {
+    if err := app.Run(context.Background()); err != nil {
         panic(err)
     }
 }
@@ -139,21 +139,5 @@ type UserServiceV2 struct {
 ```go
 app := neon.New()
 app.SetPort(3000)
-app.Run() // Runs on port 3000
+app.Run(context.Background()) // Runs on port 3000
 ```
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Roadmap
-
-Check out our [ROADMAP.md](ROADMAP.md) for upcoming features and improvements.
-
-## Join the Development! 🚀
-
-Ready to contribute to Neon's development? Join us on [GitHub](https://github.com/sri-shubham/neon) and help make API development in Go even better! ✨

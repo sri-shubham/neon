@@ -216,7 +216,6 @@ func TestEnvString(t *testing.T) {
 		expected string
 	}{
 		{DevEnv, "Development"},
-		{TestEnv, "Test"},
 		{ProdEnv, "Production"},
 		{Env(999), "Not Defined"}, // Invalid env
 	}
@@ -236,7 +235,7 @@ func TestRegisterRoute(t *testing.T) {
 		w.Write([]byte("test"))
 	})
 
-	app.registerRoute("GET", "/test", handler)
+	app.registerRoute("GET", "/test", handler, 0)
 
 	// Test that the route was registered
 	req := httptest.NewRequest("GET", "/test", nil)

@@ -1,9 +1,12 @@
 package neon
 
+import "context"
+
 // Moduler : Creates interface for input modules
 type Moduler interface {
-	// Placeholder so we donot expose empty interface
-	placeholder()
+	Init() error
+	Close(context.Context) error
+	HealthCheck() error
 }
 
 // Module : Module is default implementation for Moduler interface
@@ -11,5 +14,7 @@ type Moduler interface {
 type Module struct {
 }
 
-// Default implementaion for placeholder
-func (m Module) placeholder() {}
+// Default implementations for lifecycle methods
+func (m Module) Init() error                     { return nil }
+func (m Module) Close(ctx context.Context) error { return nil }
+func (m Module) HealthCheck() error              { return nil }
